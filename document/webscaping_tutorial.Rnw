@@ -1,0 +1,430 @@
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[colorlinks=true]{hyperref}
+\usepackage{harvard}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{fancyvrb}
+
+\title{Web Scraping With \texttt{R}}
+\author{William Marble\thanks{Prepared for the political science/international relations Summer Research College at Stanford. Vincent Bauer's \href{http://stanford.edu/~vbauer/VAMScrapingSlides.html}{excellent slides} on web scraping were very helpful in preparing this tutorial (and teaching me web scraping in \texttt{R} in the first place). The code used in this tutorial can be downloaded at \href{www.stanford.edu/~wpmarble/webscraping_tutorial/code.R}{{www.stanford.edu/\textasciitilde wpmarble/webscraping\_tutorial/code.R}}. Feel free to email me with questions or comments at \href{mailto:wpmarble@stanford.edu}{wpmarble@stanford.edu}.}}
+\date{August 11, 2016}
+\begin{document}
+
+\maketitle
+
+There is a wealth of valuable information that is publicly available online, but seems to be locked away in web pages that are not amenable to data analysis. While many organizations make their data easily available for researchers, this practice is still the exception rather than the rule -- and, oftentimes, the data we seek may not be centralized or the creators may not have intended to create a database. But researchers are increasingly turning to these useful data sources.
+
+For example, \citeasnoun{Grimmer2013b} analyzes press releases from members of Congress to study how representatives communicate to their constituents. Similarly, \citeasnoun{Nielsen2015} use European Union press releases to measure whether treaty ratification leads to praise from the international community. In both cases, these documents were available online, but they were not centralized and their authors did not intend to create a database of press releases for researchers to analyze. Nonetheless, they represent valuable data for important social science questions --- if we have a way to put them into a more usable format.
+
+Fortunately, there are many tools available for translating unruly HTML into more structured databases. The goal of this tutorial is to provide an introduction to the philosophy and basic implementation of ``web scraping'' using the open-source statistical programming language \texttt{R}.\footnote{Python is another programming language that has excellent capabilities for web scraping --- particularly with the \texttt{BeautifulSoup} package. However, I focus on \texttt{R} because more social scientists tend to be familiar with it than with Python.} I think the best way to learn webscraping is by doing it, so after a brief overview of the tools, most of this document will be devoted to working through examples.
+
+\section{High-Level Overview: the Process of Webscraping}
+
+There are essentially six steps to extracting text-based data from a website:
+\begin{enumerate}
+  \item Identify information on the internet that you want to use. 
+  \item If this information is stored on more than one web page, figure out how to automatically navigate to the web pages. In the best case scenario, you will have a directory page or the URL will have a consistent pattern that you can recreate --- e.g., \texttt{www.somewebsite.com/year/month/day.html}.\label{step2}
+  \item Locate the features on the website that flag the information you want to extract. This means looking at the underlying HTML to find the elements you want and/or identifying some sort of pattern in the website's text that you can exploit.\label{step3}
+  \item Write a script to extract, format, and save the information you want using the flags you identified.\label{step4}
+  \item Loop through all the websites from step~\ref{step2}, applying the script to each of them.
+  \item Do some awesome analysis on your newly unlocked data!\label{laststep}
+\end{enumerate}
+This tutorial will focus on steps~\ref{step3} and~\ref{step4}, which are the most difficult part of webscraping. 
+
+There is also another, simpler way to do webscraping that I'll show an example of: namely, using \textbf{A}pplication \textbf{P}rogramming \textbf{I}nterfaces (APIs) that some websites make available. APIs basically give you a simple way to query a database and return the data you ask for in a nice format (usually JSON or XML). APIs are great, but aren't usually available, so I don't emphasize them here.
+
+\section{Basics of HTML and Identifying the Info We Want}
+
+Hypertext Markup Language --- or HTML --- is a standardized system for writing web pages. Its structure is fairly simple, and understanding its basics is important for successful web scraping. 
+
+This is basically what a website looks like under the hood:\footnote{To see what this webpage looks like in a browser, go to \href{http://stanford.edu/~wpmarble/webscraping_tutorial/html/silly_webpage.html}{this link}.}
+
+<<eval=F>>=
+<!DOCTYPE html> 
+<html> 
+  
+  <head>
+    <title>This is the title of the webpage</title>
+  </head>
+  
+  <body>
+    <h1>This is a heading</h1>  
+    <p class="notThisOne">This is a paragraph</p>  
+    <p class="thisOne">This is another paragraph with a different class!</p>  
+    
+    <div id="myDivID"> 
+      <p class="divGraf"> 
+        This is a paragraph inside a division, along with a 
+        <a href="http://stanford.edu">a link</a>.
+      </p> 
+    </div>
+  </body> 
+
+</html>
+@
+
+\begin{figure}
+  \centering
+  \includegraphics[width=.75\textwidth]{HTMLDOMTree.png}
+  \caption{HTML document tree. Source: \url{http://www.openbookproject.net/tutorials/getdown/css/images/lesson4/HTMLDOMTree.png}}\label{fig:htmltree}
+\end{figure}
+
+Figure~\ref{fig:htmltree} also provides a visual representation of an HTML tree. 
+
+There are several things to note about this structure. First, elements are always surrounded by code that tells web browsers what they are. These tags are opened with triangular brackets \verb!<tag>! and closed with a slash inside more triangular brackets \verb!</tag>!. Second, these tags often have additional information, such as information about the \texttt{class}. Third, these elements are always nested inside other elements. Together, we can use these features to extract the data we want. 
+
+It's easy to see the underlying HTML for any webpage: in Chrome, click View $\rightarrow$ Developer $\rightarrow$ View Source. This is the first thing you should do when you want to extract data from a webpage. There is also an excellent Chrome add-on called \href{http://selectorgadget.com/}{SelectorGadget} that allows you to point-and-click the parts of the website that you want to extract. It will automatically tell you what the underlying tags are, and you can copy-paste that into your script. 
+
+\section{Tools for Webscraping}
+
+\subsection{\texttt{rvest}}
+How can you select elements of a website in \texttt{R}? The \texttt{rvest} package is the workhorse toolkit. The workflow typically is as follows:\footnote{More information can be found on the GitHub page for \href{https://github.com/hadley/rvest}{rvest}.}
+\begin{enumerate}
+  \item Read a webpage using the function \verb!read_html()!. This function will download the HTML and store it so that \texttt{rvest} can navigate it. 
+  \item Select the elements you want using the function \verb!html_nodes()!. This function will take an HTML object (from \verb!read_html!) along with a CSS or Xpath selector (e.g., \verb!p! or \verb!span!) and save all the elements that match the selector. This is where SelectorGadget can be helpful. 
+  \item Extract components of the nodes you've selected using functions like \verb!html_tag()! (the name of the tag), \verb!html_text()! (all text inside the tag), \verb!html_attr()! (contents of a single attribute) and \verb!html_attrs()! (all attributes). 
+\end{enumerate}
+
+The \texttt{rvest} package also has other features that are more advanced --- such as the ability to fill out forms on websites and navigate websites as if you were using a browser. 
+
+\subsection{Regular Expressions}
+Oftentimes you'll see a pattern in text that you'll want to exploit. For instance, a new variable might always follow a colon that comes after  a single word in a new line. Regular expressions (or regex) is a language to precisely define those patterns. They're pretty crucial for webscraping and text analysis. Explaining regex is beyond the scope of this tutorial but I posted a good cheatsheet from AddedBytes.com \href{http://stanford.edu/~wpmarble/webscraping_tutorial/regex_cheatsheet.pdf}{at this link}. In \texttt{R}, some regex commands you might need to use:
+\begin{itemize}
+  \item \verb!grep(pattern, string)! \\
+  This command takes a string vector and returns a vector of the indices of the string that match the pattern
+  <<>>=
+  string = c("this is", "a string", "vector", "this")
+  grep("this", string)
+  @
+  
+  \item \verb!grepl(pattern, string)! \\
+  This command takes a string vector with length \texttt{n} as an input and returns a logical vector of length \texttt{n} that says whether the string matches the pattern. Example:
+  <<>>=
+  grepl("this", string)
+  @
+  \item \verb!gsub(pattern, replacement, string)! \\
+  This command finds all the instances of \texttt{pattern} in \texttt{string} and replaces it with \texttt{replacement}. Example:
+  <<>>=
+  gsub(pattern="is", replacement="WTF", string)
+  @
+  
+\end{itemize}
+
+\section{Simple Example of Webscraping}
+
+Let's see what that fake website above looks like in \texttt{rvest}. I'll first read in the HTML, then I'll select all paragraphs, then select elements with class ``thisOne,'' then select elements with the ID ``myDivID.'' Finally, I'll extract some text and the link.
+
+<<message=F,warning=F>>=
+## First, load required packages (or install if they're not already)
+pkgs = c("rvest", "magrittr", "httr", "stringr")
+for (pkg in pkgs){
+  if (!require(pkg, character.only = T)){
+    install.packages(pkg)
+    library(pkg)
+  }
+}        
+@
+<<cache=T>>=
+## Read my example html with read_html()
+silly_webpage = read_html("http://stanford.edu/~wpmarble/webscraping_tutorial/html/silly_webpage.html")
+
+# get paragraphs (css selector "p")
+my_paragraphs = html_nodes(silly_webpage, "p")
+my_paragraphs
+
+# get elements with class "thisOne" -- use a period to denote class
+thisOne_elements = html_nodes(silly_webpage, ".thisOne")
+thisOne_elements
+
+# get elements with id "myDivID" -- use a hashtag to denote id
+myDivID_elements = html_nodes(silly_webpage, "#myDivID")
+myDivID_elements
+
+# extract text from myDivID_elements
+myDivID_text = html_text(myDivID_elements)
+myDivID_text
+
+# extract links from myDivID_elements. first i extract all the "a" nodes (as in a href="website.com")
+# and then extract the "href" attribute from those nodes
+myDivID_link = html_nodes(myDivID_elements, "a") %>% html_attr("href")
+myDivID_link
+@
+
+Here, I used CSS selectors (class and ID) to extract nodes from the HTML. One thing to note is that to select classes, you put a period before the name of the class --- \verb!html_nodes(silly_webpage, ".thisOne")!. To select ID's, put a hashtag in front of the ID you want --- \verb!html_nodes(silly_webpage, "#myDivID")!. 
+
+\section{More Difficult Example}
+
+\begin{figure}[!t]
+  \centering
+  \begin{subfigure}[b]{.5\textwidth}
+    \centering
+    \includegraphics[width=.9\textwidth]{ncsl_database.png}\caption{Search interface}
+  \end{subfigure}%
+  \begin{subfigure}[b]{.5\textwidth}
+    \centering
+    \includegraphics[width=.9\textwidth]{ncsl_results.png}\caption{Search results}
+  \end{subfigure}
+  \caption{Screenshots from the \href{http://www.ncsl.org/research/elections-and-campaigns/ballot-measures-database.aspx}{NCSL ballot measure database}.}\label{fig:ncsl}
+\end{figure}
+
+Say we want to know what ballot initiatives will be up for a vote in 2016 in each state. The National Conference of State Legislatures has a nice searchable database of all the initiatives sorted by year, state, and policy topic. It's available at \href{http://www.ncsl.org/research/elections-and-campaigns/ballot-measures-database.aspx}{http://www.ncsl.org/research/elections-and-campaigns/ballot-measures-database.aspx} and Figure~\ref{fig:ncsl} shows screenshots of the database. There's a lot of information here: it has the name of the ballot measure, when it's being voted on, the results, the policy topic areas it covers, and a fairly detailed summary. Unfortunately, it's not easy to download this database and it doesn't return new URL's for each search, meaning it's not easy to loop through searches automatically. 
+
+One solution to this is to search for \textit{all} ballot measures in 2016, manually download and save the resulting HTML, then use \texttt{R} to extract the info I want. This way, I don't need to figure out how to get \texttt{R} to search for me.\footnote{This is a reasonable approach when a single search can return all the results I want. If instead we need to perform many searches, we might want to automate it. \texttt{rvest} has \texttt{html\_form()} and related functions to facilitate filling out forms on webpages. Unfortunately this package doesn't work very well in this case; instead, we'd probably need to use other, more complicated tools like the \texttt{POST()} command from the \texttt{httr} package.} 
+
+\subsection{End Product}
+
+I want the final result to be a spreadsheet-like object that looks something like this:~\\\\
+
+\begin{tabular}{ccccc}
+  \textbf{State} & \textbf{Name} & \textbf{Title} &  \textbf{Topic Areas} & \textbf{Summary} \\ \midrule
+  Alabama & Amendment 1 & AU Board of Trustees Amendment & Education & \dots \\
+  Alabama & Amendment 12 & Baldwin County Tolls & Transportation & \dots \\
+  $\vdots$ & $\vdots$ & $\vdots$ & $\vdots$ & $\vdots$ \\
+  Wyoming & Amendment A & Non-Permanent Fund Investment & Budgets & \dots \\\bottomrule
+\end{tabular}
+~\\ \\
+
+\subsection{Selecting What We Want}
+
+With this end goal in mind, how can we get there? First, using SelectorGadget, I can tell there are two types of tags I want to extract:
+\begin{itemize}
+  \item The information on ballot measures (except their state) can be extracted using this Xpath selector:\\ 
+  \verb!//*[contains(concat( " ", @class, " " ), concat( " ", "divRepeaterResults", " " ))]! 
+  \item States can be extracted using this Xpath selector:\\
+  \verb!//*[contains(concat( " ", @class, " " ), concat( " ", "h2Headers", " " ))]!
+\end{itemize}
+(Don't worry about not understanding that code; I don't either.) With these selectors in hand, I can \verb!read_html()! and then select the parts of the website I want to extract using \verb!html_nodes()!. 
+
+<<>>=
+# STEP 1, OUTSIDE OF R
+# Open that webpage on Chrome and search for the relevant set of ballot measures 
+# (in this case, everything from 2016). Then download the page source.
+# I did this and saved it to my website.
+
+# STEP 2
+# Use rvest to read the html file
+measures = read_html("http://stanford.edu/~wpmarble/webscraping_tutorial/html/ballot_measures_2016.html")
+
+# STEP 3 
+# Select the nodes I want -- I can use the | character to return both types of 
+# Xpath selectors I want
+selector = '//*[contains(concat( " ", @class, " " ), concat( " ", "divRepeaterResults", " " ))]|//*[contains(concat( " ", @class, " " ), concat( " ", "h2Headers", " " ))]'
+my_nodes = measures %>% html_nodes(xpath=selector) 
+
+# let's look at what we got
+my_nodes[1:9]
+
+# the first 6 nodes don't have information I want, so get rid of them
+my_nodes = my_nodes[-c(1:6)]
+@
+
+\subsection{Parsing the Text Information}
+
+The text in a node looks like this: 
+\begin{Verbatim}[frame=single]
+\r\n                \r\n                    State-Provided Campaign 
+Finance System Funded by Imposing a Non-Resident Sales Tax\r\n            
+\r\n                    Initiative 1464\r\n                
+\r\n                \r\n                \r\n                
+\r\n        
+Election: \r\n                    General\r\n                    
+-\r\n                    2016\r\n                    \r\n         
+Type: \r\n                    Initiative\r\n               
+\r\n                    Status: Undecided\r\n                  
+Topic Areas: \r\n                     Ethics/Lobbying/Campaign Finance | 
+Tax & Revenue\r\n                    \r\n        
+\r\n                        Summary: Click for Summary\r\n            
+\r\n                    \r\n        
+Creates a campaign-finance system; allows residents to direct 
+state funds to candidates; repeals the
+non-resident sales-tax exemption; restricts lobbying employment by 
+certain former public employees; and 
+adds enforcement requirements.\r\n                \r\n              
+\r\n                \r\n            
+\end{Verbatim}
+
+Here we see all the information we want, but it's all jumbled up and pasted together into one long string. But there are clearly some clues we can use to split up the string to make it more manageable. Note that the fields are separated by two line breaks, like this: \verb!\r\n \r\n! (with some extra spaces). We can split the string into chunks by using that identifier.\footnote{There is one field that isn't separated by  this double-line break, ``Topic Areas.'' I handle this below.}
+
+<<>>=
+thetext = html_text(my_nodes[[128]])  # randomly chose 128 as an example to work thru
+
+# get rid of all those extra spaces
+thetext = gsub(pattern = "[ ]+", replacement = " ", thetext)
+
+# let's split up the string using the "\r\n \r\n" identifier plus the one field that's 
+# not separated by two line breaks -- topic areas
+thetext = strsplit(thetext, split= "\r\n \r\n|\r\n Topic")[[1]]
+thetext
+@
+
+Looking better --- now we have each field on its own line, and we can get rid of the extraneous stuff to just leave what we want.
+
+<<>>=
+# get rid of the \r\n,  extra whitespace, and empty entries
+thetext = gsub(pattern="\\r|\\n", replacement="", thetext) %>% str_trim
+thetext = thetext[thetext != ""]
+thetext
+@
+
+Home stretch! We can easily figure out what each entry is by using the \verb!grepl()! command.
+
+<<>>=
+title = thetext[1]
+election = thetext[grepl(pattern = "^Election", thetext)] %>% 
+  gsub("Election:", "", x = .) %>% str_trim
+type = thetext[grepl(pattern = "^Type", thetext)] %>% 
+  gsub("Type:", "", x = .) %>% str_trim
+status = thetext[grepl(pattern = "^Status", thetext)] %>% 
+  gsub("Status:", "", x = .) %>% str_trim
+topic_areas = thetext[grepl(pattern = "^Area:|Areas:", thetext)] %>% 
+  gsub("Area:|Areas:", "", x = .) %>% str_trim
+
+# summary is a little trickier to get because the actual summary comes
+# the entry after the one that says "Summary: Click for Summary"
+summary_index = grep(pattern="^Summary", thetext) + 1
+summary = thetext[summary_index]
+@
+
+And we're done! Let's have a look:
+
+<<echo=F>>=
+for (x in c("title", "election", "type", "status", "summary", "topic_areas")){
+  cat(x,": ", get(x), "\n")
+}
+@
+
+\subsection{Scaling Up}
+
+Now that we have the basic infrastructure in place, we can repeat this process for each node using a \verb!for! loop. The only extra thing we need to do is keep track of what state we're in. This is easy to do by first noting which indices of the nodes object contain states (i.e., those with class ``h2Headers''). Once we take care of that, we can repeat the exact same code as above and store the results in a data frame.
+
+<<eval=T>>=
+# create state / info indicator vector
+state_or_info = my_nodes %>% html_attr("class")
+state_or_info = ifelse(state_or_info == "h2Headers", "state", "info")
+
+# set up data frame to store results
+results_df = data.frame(state = rep(NA_character_, length(my_nodes)),
+                        title = NA_character_,
+                        election = NA_character_,
+                        type = NA_character_,
+                        status = NA_character_,
+                        topic_areas = NA,
+                        summary = NA_character_, 
+                        stringsAsFactors = F)
+
+
+state = NA_character_ # this variable will keep track of what state we're in
+
+# loop through all the nodes
+for (i in 1:length(my_nodes)){
+  
+  # first see if the node tells us what state we're in; if so, update
+  # the state variable
+  if (state_or_info[i] == "state") {
+    state = html_text(my_nodes[[i]])
+  }
+  
+  # if it doesn't say what state we're in, apply the parsing code from above
+  else {
+    results_df$state[i] = state # fill in state
+    
+    # parse text like above
+    thetext = html_text(my_nodes[[i]]) 
+    thetext = gsub(pattern = "[ ]+", replacement = " ", thetext)
+    thetext = strsplit(thetext, split= "\r\n \r\n|\r\n Topic")[[1]]
+    
+    thetext = gsub(pattern="\\r|\\n", replacement="", thetext) %>% str_trim
+    thetext = thetext[thetext != ""]
+
+    
+    results_df$title[i] = thetext[1]
+    results_df$election[i] = thetext[grepl(pattern = "^Election", thetext)] %>% 
+      gsub("Election:", "", x = .) %>% str_trim
+    results_df$type[i] = thetext[grepl(pattern = "^Type", thetext)] %>% 
+      gsub("Type:", "", x = .) %>% str_trim
+    results_df$status[i] = thetext[grepl(pattern = "^Status", thetext)] %>% 
+      gsub("Status:", "", x = .) %>% str_trim
+    results_df$topic_areas[i] = thetext[grepl(pattern = "^Area:|Areas:", thetext)] %>% 
+      gsub("Area:|Areas:", "", x = .) %>% str_trim
+    
+    summary_index = grep(pattern="^Summary", thetext) + 1
+    results_df$summary[i] = thetext[summary_index]
+  }
+}
+results_df = results_df[!is.na(results_df$state),]
+
+# let's have a look at a bit of the final product (some variables omitted for space)
+print(results_df[1:5, 1:3], row.names = F)
+@
+
+And voil\`{a}! We took the data from a mess of HTML and turned it into a nice, spreadsheet-like database that is ready to be used in our analysis. 
+
+\section{A Very, Very Short Introduction to APIs}
+
+A much easier way to download data from websites is through an application programming interface. The idea behind an API is that you send a request to the server using a precisely defined query structure, and the server sends you the data you asked for in a precisely defined format. 
+
+With most APIs, you just need to know how to format the URL, and there is documentation telling you what to include. For example, the OMDb API lets you download the IMDb data for any movie or TV show by going to a URL like this: \verb!http://omdbapi.com/?parameter1=value1&parameter2=value2!. The parameter ``t'' is for title, so if I want to look up information about ``Game of Thrones,'' I can follow this link: \href{http://omdbapi.com/?t=game+of+thrones}{http://omdbapi.com/?t=game+of+thrones}. (Other possible parameters can be found in the \href{http://www.omdbapi.com/}{OMDb documentation}.) 
+
+You'll notice that the information is returned in JSON, which is a data storage format that's often used on websites. We'll have to convert this to an \texttt{R} format. So how can we automate webscraping using an API? We'll again use \texttt{rvest} and then process the JSON using the package \texttt{rjson}.
+
+As a small example, let's look up all the TV shows in the past 10 years that got Emmy nominations for best drama and compare their IMDb ratings. 
+
+<<message=F, warning=F>>=
+# install rjson
+if (!require(rjson)) {install.packages("rjson");library(rjson)}
+@
+
+<<cache=T>>=
+list_of_shows = c("breaking bad", "mad men", "game of thrones", 
+                  "homeland", "house of cards", "true detective", 
+                  "orange is the new black", "the americans", "mr robot",
+                  "boardwalk empire", "the good wife", "dexter",
+                  "lost", "true blood", "house", "big love", "downton abbey",
+                  "damages", "boston legal", "grey's anatomy", "the sopranos", 
+                  "heroes", "better call saul")
+
+show_db = data.frame(title = list_of_shows,
+                     year = NA, genre = NA, plot = NA, country = NA,
+                     awards = NA, metascore = NA, imdbrating = NA,
+                     imdbvotes = NA, imdbid = NA, totalseasons = NA)
+
+# construct the url for each show by pasting the name of the show after
+# the API base, and encoding using URLencode(). 
+for (show in list_of_shows){
+  show_url = paste0("http://omdbapi.com/?&t=", URLencode(show, reserved = T))
+  show_info = read_html(show_url) %>% html_text %>% fromJSON
+  
+  show_db$year[show_db$title==show] = show_info$Year
+  show_db$genre[show_db$title==show] = show_info$Genre
+  show_db$plot[show_db$title==show] = show_info$Plot
+  show_db$country[show_db$title==show] = show_info$Country
+  show_db$awards[show_db$title==show] = show_info$Awards
+  show_db$metascore[show_db$title==show] = show_info$Metascore
+  show_db$imdbrating[show_db$title==show] = show_info$imdbRating
+  show_db$imdbvotes[show_db$title==show] = show_info$imdbVotes 
+  show_db$imdbid[show_db$title==show] = show_info$imdbID
+  show_db$totalseasons[show_db$title==show] = show_info$totalSeasons
+}
+show_db[1:5, c(1:3, 8)]
+@
+
+Now again, we have a data frame that's amenable to analysis, like Figure~\ref{fig:tvshows}. There's a lot more to learn about APIs, so I encourage you to explore more --- but many will follow this basic formula: base URL + ? + parameters. 
+
+<<tvshows, echo=F, fig.cap="IMDb ratings of Best Drama-nominated TV shows, 2006-2016.", fig.align="center", fig.height=4, fig.width=6>>=
+library(ggplot2)
+show_db = show_db[order(show_db$imdbrating),]
+show_db$title = factor(show_db$title, levels = show_db$title)
+ggplot(show_db, aes(x = title, y = as.numeric(imdbrating))) + 
+  geom_bar(stat="identity") + 
+  theme(axis.text.x = element_text(angle=65, hjust=1)) + 
+  scale_y_continuous(breaks = seq(0, 10, 1)) + 
+  coord_cartesian(ylim = c(0, 10)) + 
+  labs(x = NULL, y = "IMDb rating")
+@
+
+
+\bibliographystyle{apsr}
+\bibliography{/Users/Will/Dropbox/master_bib_file/library.bib}
+
+\end{document}

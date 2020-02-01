@@ -1,0 +1,8 @@
+base
+knitr
+xml2
+rvest
+magrittr
+httr
+stringr
+rjson

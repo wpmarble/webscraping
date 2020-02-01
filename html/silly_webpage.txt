@@ -1,0 +1,21 @@
+<!DOCTYPE html> 
+<html> 
+  
+  <head>
+    <title>This is the title of the webpage</title>
+  </head>
+  
+  <body>
+    <h1>This is a heading</h1>  
+    <p class="notThisOne">This is a paragraph</p>  
+    <p class="thisOne">This is another paragraph with a different class!</p>  
+    
+    <div id="myDivID"> 
+      <p class="divGraf"> 
+        This is a paragraph inside a division, along with a 
+        <a href="http://stanford.edu">a link</a>.
+      </p> 
+    </div>
+  </body> 
+
+</html>
